@@ -276,5 +276,15 @@ function 実行_目標管理書き戻し() {
     '書き込み件数：' + result.planned + '\n' +
     'スキップ件数：' + result.skipped + '\n\n' +
     'スキップ内容：\n' + (result.skips.length > 0 ? result.skips.join('\n') : '（なし）');
-  SpreadsheetApp.getUi().alert(message);
+
+  // 書き込み自体は完了しているので、結果は先にログへ残す（アラートが出せなくても結果は失われない）。
+  Logger.log(message);
+
+  // エディタから直接実行した場合はUIコンテキストが無く getUi() が例外を投げるため、
+  // その場合はアラート表示をあきらめる（結果は上記ログに既に残っている）。
+  try {
+    SpreadsheetApp.getUi().alert(message);
+  } catch (e) {
+    Logger.log('（アラート表示不可：エディタからの直接実行のためUIコンテキストがありません。結果は上記ログの通りです）');
+  }
 }
