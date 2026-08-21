@@ -3,6 +3,15 @@
  * 実績DBが正。目標管理シートは表示用の器として上書きする。
  * 書き込み先は「目標管理（2026年4月～3月末)」シートのみ。
  * 実績DB・担当マスタ・転記ログ・目標DB へは一切書き込まない（読み取りのみ）。
+ *
+ * 対象は個人ブロック13名のみ。拠点ブロック（東京・大阪・福岡）は書き戻し対象から
+ * 完全に除外している（区分='拠点'のレコードは読み込みも書き込みも行わない）。理由：
+ *   1. 東京拠点ブロックの走査範囲にITS/ENGセクションのブロックが含まれてしまい、
+ *      同じラベルが複数行に一致してスキップされる問題が起きた。
+ *   2. 拠点の「粗利」列に実績DB側の値（待機費控除後）を書くと、目標管理シート側の
+ *      「粗利」と「実績粗利（待機費込み）」という別行の意味が壊れる。
+ *   拠点の集計定義そのものは新ダッシュボード側で作り直す方針のため、旧シートの
+ *   拠点行はあえて書き戻さない（個人ブロックの合計を突き合わせる用途では現状不要）。
  */
 
 var KANRI_SHEET_NAME = '目標管理（2026年4月～3月末)';
@@ -33,13 +42,6 @@ var KANRI_PERSON_BLOCKS = [
   { name: '尾上', row: 269 }
 ];
 
-// 拠点ブロック：A列に拠点名が入る行番号（診断で確定済み）
-var KANRI_LOCATION_BLOCKS = [
-  { name: '東京', row: 16 },
-  { name: '大阪', row: 66 },
-  { name: '福岡', row: 81 }
-];
-
 // ラベルの表記揺れ吸収。B列との完全一致判定にのみ使う（部分一致は誤ヒットの元なので使わない）。
 var KANRI_ITEM_LABELS = {
   売上: ['実績売上高'],
@@ -64,7 +66,8 @@ function kanriYmToColumn(ym) {
 }
 
 /**
- * 実績DBの全行を読み取り、年月を正規化したレコード配列で返す（読み取りのみ）。
+ * 実績DBの区分='個人'の行のみを読み取り、年月を正規化したレコード配列で返す（読み取りのみ）。
+ * 区分='拠点'は対象外のため読み込まない（ファイル冒頭のコメント参照）。
  */
 function readResultDbRecords(ss) {
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAMES.RESULT_DB);
@@ -79,41 +82,36 @@ function readResultDbRecords(ss) {
     headers.forEach(function (h, c) { record[h] = row[c]; });
     record['年月'] = normalizeYearMonth(record['年月'], ss);
     return record;
-  }).filter(function (r) { return r['年月']; });
+  }).filter(function (r) { return r['年月'] && r['区分'] === CONFIG.RECORD_KIND.PERSON; });
 }
 
 /**
- * (区分, 担当or拠点, 年月) をキーにした索引を作る。
- * 区分='個人'は「担当」、区分='拠点'は「拠点」でマッチさせる。
+ * (担当, 年月) をキーにした索引を作る（区分='個人'のみを対象としているため担当名で一意）。
  */
 function buildResultDbIndex(records) {
   var index = {};
   records.forEach(function (r) {
-    var name = r['区分'] === CONFIG.RECORD_KIND.PERSON ? r['担当'] : r['拠点'];
-    index[[r['区分'], name, r['年月']].join('|')] = r;
+    index[[r['担当'], r['年月']].join('|')] = r;
   });
   return index;
 }
 
 /**
- * 対象ブロック（個人＋拠点）を開始行の昇順に並べ、各ブロックの走査範囲
+ * 個人ブロックを開始行の昇順に並べ、各ブロックの走査範囲
  * （次のブロック開始行の手前まで、最後のブロックはシート最終行まで）を確定する。
- * 全社・ITS・ENGなど未対象のブロックの行番号は扱わない（対象ブロックの間に
+ * 全社・ITS・ENG・拠点など対象外のブロックの行番号は扱わない（対象ブロックの間に
  * 挟まっていても、ラベル完全一致でしか行を特定しないため誤って書き込むことはない）。
  */
 function buildKanriBlockRanges(sheet) {
   var blocks = KANRI_PERSON_BLOCKS.map(function (b) {
-    return { kind: CONFIG.RECORD_KIND.PERSON, name: b.name, row: b.row };
-  }).concat(KANRI_LOCATION_BLOCKS.map(function (b) {
-    return { kind: CONFIG.RECORD_KIND.LOCATION, name: b.name, row: b.row };
-  }));
+    return { name: b.name, row: b.row };
+  });
   blocks.sort(function (a, b) { return a.row - b.row; });
 
   var lastRow = sheet.getLastRow();
   return blocks.map(function (block, i) {
     var next = blocks[i + 1];
     return {
-      kind: block.kind,
       name: block.name,
       startRow: block.row,
       endRow: next ? next.row - 1 : lastRow
@@ -218,7 +216,7 @@ function writeBackToKanriSheet(ss, dryRun) {
     }
 
     blockRanges.forEach(function (block) {
-      var record = recordIndex[[block.kind, block.name, ym].join('|')];
+      var record = recordIndex[[block.name, ym].join('|')];
       if (!record) {
         skips.push(ym + ' ' + block.name + '：実績DBに該当レコードがないためスキップ');
         return;
